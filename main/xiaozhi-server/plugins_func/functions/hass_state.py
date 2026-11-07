@@ -200,7 +200,7 @@ async def handle_hass_set_state(conn: "ConnectionHandler", entity_id, state):
         description = f"亮度已调整到{state['input']}"
         action = "turn_on"
         arg = "brightness_pct"
-        value = state["input"]
+        value = int(state["input"])
     elif state["type"] == "set_color":
         description = f"颜色已调整到{state['rgb_color']}"
         action = "turn_on"
@@ -209,8 +209,10 @@ async def handle_hass_set_state(conn: "ConnectionHandler", entity_id, state):
     elif state["type"] == "set_kelvin":
         description = f"色温已调整到{state['input']}K"
         action = "turn_on"
-        arg = "kelvin"
-        value = state["input"]
+        # Home Assistant 2026.x 的 light.turn_on 使用 color_temp_kelvin；
+        # 旧字段 kelvin 会返回 400。
+        arg = "color_temp_kelvin"
+        value = int(state["input"])
     elif state["type"] == "volume_up":
         description = "音量已调大"
         action = state["type"]

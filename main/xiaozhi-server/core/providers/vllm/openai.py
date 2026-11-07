@@ -37,7 +37,12 @@ class VLLMProvider(VLLMProviderBase):
         model_key_msg = check_model_key("VLLM", self.api_key)
         if model_key_msg:
             logger.bind(tag=TAG).error(model_key_msg)
-        self.client = openai.OpenAI(api_key=self.api_key, base_url=self.base_url)
+        self.client = openai.OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            timeout=25.0,
+            max_retries=0,
+        )
 
     def response(self, question, base64_image):
         question = question + "(请使用中文回复)"
@@ -58,7 +63,11 @@ class VLLMProvider(VLLMProviderBase):
             ]
 
             response = self.client.chat.completions.create(
-                model=self.model_name, messages=messages, stream=False
+                model=self.model_name,
+                messages=messages,
+                stream=False,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
             )
 
             return response.choices[0].message.content

@@ -1,5 +1,7 @@
+import asyncio
 import json
 import copy
+import time
 from aiohttp import web
 from config.logger import setup_logging
 from core.api.base_handler import BaseHandler
@@ -22,6 +24,8 @@ class VisionHandler(BaseHandler):
         super().__init__(config)
         # 初始化认证工具
         self.auth = AuthToken(config["server"]["auth_key"])
+        # 同一时间只处理一张照片，避免设备排队到超时
+        self._vision_busy = False
 
     def _create_error_response(self, message: str) -> dict:
         """创建统一的错误响应格式"""
@@ -46,6 +50,19 @@ class VisionHandler(BaseHandler):
 
     async def handle_post(self, request):
         """处理 MCP Vision POST 请求"""
+        if self._vision_busy:
+            response = web.Response(
+                text=json.dumps(
+                    {"success": False, "message": "上一张照片还在处理，请稍等再拍"},
+                    ensure_ascii=False,
+                ),
+                content_type="application/json",
+            )
+            self._add_cors_headers(response)
+            return response
+
+        self._vision_busy = True
+        request_start = time.perf_counter()
         response = None  # 初始化response变量
         try:
             # 验证token
@@ -127,7 +144,23 @@ class VisionHandler(BaseHandler):
                 vllm_type, current_config["VLLM"][select_vllm_module]
             )
 
-            result = vllm.response(question, image_base64)
+            vlm_start = time.perf_counter()
+            result = await asyncio.to_thread(vllm.response, question, image_base64)
+            vlm_ms = int((time.perf_counter() - vlm_start) * 1000)
+            self.logger.bind(tag=TAG).info(
+                "VISION_TIMING "
+                + json.dumps(
+                    {
+                        "device_id": device_id,
+                        "model": select_vllm_module,
+                        "image_bytes": len(image_data),
+                        "question_len": len(question),
+                        "vlm_ms": vlm_ms,
+                        "total_ms": int((time.perf_counter() - request_start) * 1000),
+                    },
+                    ensure_ascii=False,
+                )
+            )
 
             return_json = {
                 "success": True,
@@ -148,12 +181,17 @@ class VisionHandler(BaseHandler):
             )
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"MCP Vision POST请求异常: {e}")
-            return_json = self._create_error_response("处理请求时发生错误")
+            if "timed out" in str(e).lower() or "timeout" in str(e).lower():
+                message = "视觉模型响应超时，请稍后再拍一张"
+            else:
+                message = "处理请求时发生错误"
+            return_json = self._create_error_response(message)
             response = web.Response(
                 text=json.dumps(return_json, separators=(",", ":")),
                 content_type="application/json",
             )
         finally:
+            self._vision_busy = False
             if response:
                 self._add_cors_headers(response)
             return response
